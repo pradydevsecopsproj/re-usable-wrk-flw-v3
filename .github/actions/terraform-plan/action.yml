@@ -1,0 +1,60 @@
+name: "Terraform Plan"
+
+description: "Select Terraform workspace and create a saved Terraform plan"
+
+inputs:
+  working_directory:
+    description: "Terraform working directory"
+    required: true
+
+  environment:
+    description: "Terraform environment/workspace"
+    required: true
+
+  tfvars_file:
+    description: "Terraform tfvars file"
+    required: true
+
+  plan_file:
+    description: "Terraform plan output filename"
+    required: false
+    default: "tfplan"
+
+runs:
+  using: "composite"
+  steps:
+
+    # ------------------------------------------------------------
+    # Workspace
+    # ------------------------------------------------------------
+
+    - name: Select Terraform workspace
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        TF_WORKSPACE_NAME: ${{ inputs.environment }}
+      run: |
+        set -euo pipefail
+
+        terraform workspace select "$TF_WORKSPACE_NAME" \
+          || terraform workspace new "$TF_WORKSPACE_NAME"
+
+
+    # ------------------------------------------------------------
+    # Terraform Plan
+    # ------------------------------------------------------------
+
+    - name: Terraform Plan
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        TFVARS_FILE: ${{ inputs.tfvars_file }}
+        PLAN_FILE: ${{ inputs.plan_file }}
+      run: |
+        set -euo pipefail
+
+        terraform plan \
+          -var-file="$TFVARS_FILE" \
+          -input=false \
+          -no-color \
+          -out="$PLAN_FILE"

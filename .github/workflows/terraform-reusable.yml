@@ -1,0 +1,312 @@
+# "workflow_call" makes a workflow reusable. 
+# "workflow_call" work on JOB level not steps level
+# Use "with" for inputs
+# Use "secrets" for sensitive data like secrets
+name: "Reusable Terraform CI/CD"
+
+on:
+  workflow_call:
+
+    inputs:
+
+      environment:
+        description: "Terraform environment: dev, test or prod"
+        required: true
+        type: string
+
+      terraform_version:
+        description: "Terraform CLI version"
+        required: false
+        type: string
+        default: "1.15.3"
+
+      tflint_version:
+        description: "TFLint version"
+        required: false
+        type: string
+        default: "v0.52.0"
+
+      working_directory:
+        description: "Terraform root directory"
+        required: false
+        type: string
+        default: "./Infra-repo/root"
+
+      tfvars_file:
+        description: "Terraform variable file"
+        required: true
+        type: string
+
+      run_apply:
+        description: "Whether Terraform Apply should execute"
+        required: false
+        type: boolean
+        default: false
+
+      trivy_exit_code:
+        description: "Trivy exit code"
+        required: false
+        type: string
+        default: "1"
+
+    secrets:
+
+      AWS_ROLE_ARN:
+        description: "AWS IAM role ARN used with GitHub OIDC"
+        required: true
+
+jobs:
+
+  # ============================================================
+  # TERRAFORM PLAN
+  # ============================================================
+
+  terraform-plan:
+
+    name: "Terraform Plan - ${{ inputs.environment }}"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    # outputs:
+    #   environment: ${{ inputs.environment }}
+    #   plan_artifact: tfplan-${{ inputs.environment }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # ----------------------------------------------------------
+      # Terraform + TFLint
+      # ----------------------------------------------------------
+
+      - name: Setup Terraform tooling
+        uses: ./.github/actions/terraform-setup
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          tflint_version: ${{ inputs.tflint_version }}
+          github_token: ${{ github.token }}
+
+
+      # ----------------------------------------------------------
+      # AWS authentication through OIDC
+      # ----------------------------------------------------------
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+          audience: sts.amazonaws.com
+
+
+      # ----------------------------------------------------------
+      # Terraform Init
+      # ----------------------------------------------------------
+
+      - name: Terraform Init
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+
+
+      # ----------------------------------------------------------
+      # Quality checks
+      # ----------------------------------------------------------
+
+      - name: Terraform quality checks
+        uses: ./.github/actions/terraform-quality
+        with:
+          working_directory: ${{ inputs.working_directory }}
+          github_token: ${{ github.token }}
+
+
+      # ----------------------------------------------------------
+      # Security scans
+      # ----------------------------------------------------------
+
+      - name: Terraform security scans
+        uses: ./.github/actions/terraform-security
+        with:
+          working_directory: ${{ inputs.working_directory }}
+          checkov_soft_fail: "false"
+          trivy_exit_code: ${{ inputs.trivy_exit_code }}
+          trivy_severity: "CRITICAL,HIGH"
+
+
+      # ----------------------------------------------------------
+      # Terraform Plan
+      # ----------------------------------------------------------
+
+      - name: Terraform plan
+        id: terraform-plan
+        uses: ./.github/actions/terraform-plan
+        with:
+          working_directory: ${{ inputs.working_directory }}
+          environment: ${{ inputs.environment }}
+          tfvars_file: ${{ inputs.tfvars_file }}
+          plan_file: tfplan
+
+
+      # ----------------------------------------------------------
+      # Upload immutable plan artifact
+      # ----------------------------------------------------------
+
+      - name: Upload Terraform plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ inputs.working_directory }}/tfplan
+          if-no-files-found: error
+          retention-days: 7
+
+
+      # ----------------------------------------------------------
+      # PR comment
+      # ----------------------------------------------------------
+
+      - name: Comment Terraform result on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const environment = '${{ inputs.environment }}';
+
+            const body = [
+              '## Terraform Plan',
+              '',
+              `**Environment:** \`${environment}\``,
+              `**Terraform:** \`${{ inputs.terraform_version }}\``,
+              '',
+              'Terraform formatting, validation, TFLint, security scans and plan completed.',
+              '',
+              `**Workflow:** ${context.workflow}`,
+              `**Commit:** ${context.sha}`
+            ].join('\n');
+            
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+
+  # ============================================================
+  # TERRAFORM APPLY
+  # ============================================================
+
+  terraform-apply:
+
+    name: "Terraform Apply - ${{ inputs.environment }}"
+    needs:
+      - terraform-plan
+
+    if: ${{ inputs.run_apply == true }}
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ inputs.environment }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+
+      # ----------------------------------------------------------
+      # Checkout EXACT commit
+      # ----------------------------------------------------------
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # ----------------------------------------------------------
+      # Terraform
+      # ----------------------------------------------------------
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+
+      # ----------------------------------------------------------
+      # AWS OIDC
+      # ----------------------------------------------------------
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+          audience: sts.amazonaws.com
+
+
+      # ----------------------------------------------------------
+      # Terraform Init
+      # ----------------------------------------------------------
+
+      - name: Terraform Init
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+
+
+      # ----------------------------------------------------------
+      # Workspace
+      # ----------------------------------------------------------
+
+      - name: Select Terraform workspace
+        env:
+          TF_WORKSPACE_NAME: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          terraform workspace select "$TF_WORKSPACE_NAME" \
+            || terraform workspace new "$TF_WORKSPACE_NAME"
+
+
+      # ----------------------------------------------------------
+      # Download exact plan generated by PLAN job
+      # ----------------------------------------------------------
+
+      - name: Download Terraform plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ inputs.working_directory }}
+
+
+      # ----------------------------------------------------------
+      # Apply
+      # ----------------------------------------------------------
+
+      - name: Terraform Apply
+        run: |
+          set -euo pipefail
+
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            tfplan

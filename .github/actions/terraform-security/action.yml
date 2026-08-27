@@ -1,0 +1,56 @@
+name: "Terraform Security Scan"
+
+description: "Run Checkov and Trivy IaC security scans"
+
+inputs:
+  working_directory:
+    description: "Terraform working directory"
+    required: true
+
+  checkov_soft_fail:
+    description: "Whether Checkov failures should be non-blocking"
+    required: false
+    default: "false"
+
+  trivy_exit_code:
+    description: "Trivy exit code when vulnerabilities are found"
+    required: false
+    default: "1"
+
+  trivy_severity:
+    description: "Trivy severity levels"
+    required: false
+    default: "CRITICAL,HIGH"
+
+runs:
+  using: "composite"
+
+  steps:
+
+    # ------------------------------------------------------------
+    # Checkov
+    # ------------------------------------------------------------
+
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@v12.1347.0
+      with:
+        directory: ${{ inputs.working_directory }}
+        framework: terraform
+        soft_fail: ${{ inputs.checkov_soft_fail }}
+        quiet: false
+
+
+    # ------------------------------------------------------------
+    # Trivy IaC scan
+    # ------------------------------------------------------------
+
+    - name: Run Trivy IaC scan
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        scan-type: config
+        scan-ref: ${{ inputs.working_directory }}
+        hide-progress: false
+        format: table
+        exit-code: ${{ inputs.trivy_exit_code }}
+        ignore-unfixed: true
+        severity: ${{ inputs.trivy_severity }}

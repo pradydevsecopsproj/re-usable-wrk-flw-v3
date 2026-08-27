@@ -1,0 +1,40 @@
+name: "Terraform TEST"
+
+on:
+  push:
+    branches:
+      - test
+    paths:
+      - "Infra-repo/**"
+
+  pull_request:
+    branches:
+      - test
+    paths:
+      - "Infra-repo/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+
+  terraform:
+
+    uses: ./.github/workflows/terraform-reusable.yml
+
+    with:
+
+      environment: test
+      terraform_version: "1.15.3"
+      tflint_version: "v0.52.0"
+      working_directory: "./Infra-repo/root"
+      tfvars_file: "../environments/test/test.tfvars"
+      run_apply: ${{ github.event_name == 'push' }}
+      trivy_exit_code: "1"
+
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}

@@ -1,0 +1,71 @@
+name: "Terraform Setup"
+
+description: "Install Terraform and TFLint and initialize TFLint plugins"
+
+inputs:
+  terraform_version:
+    description: "Terraform CLI version"
+    required: true
+
+  tflint_version:
+    description: "TFLint version"
+    required: true
+
+  github_token:
+    description: "GitHub token used by TFLint plugin initialization"
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+
+    # ------------------------------------------------------------
+    # Terraform setup
+    # ------------------------------------------------------------
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+
+
+    # ------------------------------------------------------------
+    # TFLint setup
+    # ------------------------------------------------------------
+
+    - name: Setup TFLint
+      uses: terraform-linters/setup-tflint@v3
+      with:
+        tflint_version: ${{ inputs.tflint_version }}
+
+
+    - name: Initialize TFLint
+      shell: bash
+      working-directory: ./Infra-repo/root
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+
+        tflint --init
+
+
+    # ------------------------------------------------------------
+    # Display versions --- Optional ------Comment
+    # ------------------------------------------------------------
+
+    - name: Display Terraform version
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        terraform version
+
+
+    - name: Display TFLint version
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        tflint --version

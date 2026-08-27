@@ -1,0 +1,58 @@
+name: "Terraform Quality"
+
+description: "Run Terraform formatting, validation and TFLint checks"
+
+inputs:
+  working_directory:
+    description: "Terraform working directory"
+    required: true
+    default: "./Infra-repo/root"
+
+  github_token:
+    description: "GitHub token used by TFLint"
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+
+    # ------------------------------------------------------------
+    # TFLint
+    # ------------------------------------------------------------
+
+    - name: Run TFLint
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+
+        tflint -f compact
+
+
+    # ------------------------------------------------------------
+    # Terraform format
+    # ------------------------------------------------------------
+
+    - name: Terraform Format Check
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+
+        terraform fmt -check -recursive
+
+
+    # ------------------------------------------------------------
+    # Terraform validation
+    # ------------------------------------------------------------
+
+    - name: Terraform Validate
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+
+        terraform validate
