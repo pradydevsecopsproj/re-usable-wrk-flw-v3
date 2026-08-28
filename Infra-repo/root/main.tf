@@ -7,7 +7,7 @@ module "vpc" {
   tags             = var.tags
 }
 
-
+# Module for Security group
 module "SG" {
   source = "../modules/SG"
   #version = "" need to add version of this custom SG module
