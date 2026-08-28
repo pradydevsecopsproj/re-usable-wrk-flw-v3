@@ -55,6 +55,19 @@ on:
         description: "AWS IAM role ARN used with GitHub OIDC"
         required: true
 
+# =====================================================================
+# GLOBAL ENVIRONMENT VARIABLES
+# =====================================================================
+
+env:
+
+  TF_LOG: INFO
+  # Terraform provider/plugin cache
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform.d/plugin-cache
+
+  # Terraform CLI configuration file
+  TF_CLI_CONFIG_FILE: ${{ github.workspace }}/.terraformrc
+
 jobs:
 
   # ============================================================
@@ -79,6 +92,7 @@ jobs:
       run:
         shell: bash
         working-directory: ${{ inputs.working_directory }}
+     
 
     steps:
 
@@ -89,6 +103,69 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ========================================================
+      # CREATE TERRAFORM PLUGIN CACHE DIRECTORY
+      # ========================================================
+      
+      - name: Create Terraform plugin cache directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+          echo "Terraform plugin cache directory:"
+          echo "$TF_PLUGIN_CACHE_DIR"
+
+
+      # ========================================================
+      # CONFIGURE TERRAFORM PLUGIN CACHE
+      # ========================================================
+
+      - name: Configure Terraform CLI plugin cache
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "$TF_CLI_CONFIG_FILE" <<EOF
+          plugin_cache_dir = "$TF_PLUGIN_CACHE_DIR"
+          EOF
+
+          echo "Terraform CLI configuration:"
+          cat "$TF_CLI_CONFIG_FILE"
+      # -----------------------------------------------------------------
+      #  CACHE TERRAFORM PROVIDERS
+      # -----------------------------------------------------------------
+
+      - name: Cache Terraform providers
+        id: terraform-provider-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.terraform.d/plugin-cache
+          key: terraform-provider-${{ runner.os }}-${{ runner.arch }}-${{ inputs.terraform_version }}-${{ hashFiles('Infra-repo/root/.terraform.lock.hcl') }}
+
+          restore-keys: |
+            terraform-provider-${{ runner.os }}-${{ runner.arch }}-${{ inputs.terraform_version }}-
+
+
+      # -----------------------------------------------------------------
+      # SHOW CACHE STATUS
+      # -----------------------------------------------------------------
+
+      - name: Display Terraform cache status
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.terraform-provider-cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "Terraform provider cache HIT"
+          else
+            echo "Terraform provider cache MISS"
+          fi
+
+          echo ""
+          echo "Terraform plugin cache contents:"
+          find "$TF_PLUGIN_CACHE_DIR" -maxdepth 5 -type f 2>/dev/null || true
 
       # ----------------------------------------------------------
       # Terraform + TFLint
@@ -101,6 +178,20 @@ jobs:
           tflint_version: ${{ inputs.tflint_version }}
           github_token: ${{ github.token }}
 
+      # -----------------------------------------------------------------
+      # CACHE TFLINT PLUGINS
+      # -----------------------------------------------------------------
+
+      - name: Cache TFLint plugins
+        uses: actions/cache@v4
+        with:
+
+          path: ~/.tflint.d/plugins
+
+          key: tflint-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tflint_version }}-${{ hashFiles('Infra-repo/root/.tflint.hcl') }}
+
+          restore-keys: |
+            tflint-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tflint_version }}-
 
       # ----------------------------------------------------------
       # AWS authentication through OIDC
@@ -113,6 +204,14 @@ jobs:
           aws-region: ap-south-1
           audience: sts.amazonaws.com
 
+      # -----------------------------------------------------------------
+      # VERIFY AWS IDENTITY
+      # -----------------------------------------------------------------
+      - name: Verify AWS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
 
       # ----------------------------------------------------------
       # Terraform Init
@@ -161,6 +260,26 @@ jobs:
           tfvars_file: ${{ inputs.tfvars_file }}
           plan_file: tfplan
 
+      # -----------------------------------------------------------------
+      # VERIFY TERRAFORM PLAN FILE
+      # -----------------------------------------------------------------
+
+      - name: Verify Terraform plan file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PLAN_FILE="${{ inputs.working_directory }}/tfplan"
+
+          if [[ ! -f "$PLAN_FILE" ]]; then
+            echo "ERROR: Terraform plan file was not created."
+            echo "Expected file:"
+            echo "$PLAN_FILE"
+            exit 1
+          fi
+
+          echo "Terraform plan file successfully created:"
+          ls -lh "$PLAN_FILE"
 
       # ----------------------------------------------------------
       # Upload immutable plan artifact
@@ -169,7 +288,9 @@ jobs:
       - name: Upload Terraform plan
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan-${{ inputs.environment }}
+          # Include SHA so the artifact can be associated with
+          # the exact Git commit that generated it.
+          name: tfplan-${{ inputs.environment }}-${{ github.sha }}
           path: ${{ inputs.working_directory }}/tfplan
           if-no-files-found: error
           retention-days: 7
@@ -219,7 +340,12 @@ jobs:
 
     if: ${{ inputs.run_apply == true }}
     runs-on: ubuntu-latest
-
+    # ---------------------------------------------------------------
+    # GitHub Environment
+    #
+    # If the environment has required reviewers configured,
+    # GitHub pauses the job before deployment.
+    # ---------------------------------------------------------------
     environment:
       name: ${{ inputs.environment }}
 
@@ -233,46 +359,104 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
 
     steps:
-
       # ----------------------------------------------------------
       # Checkout EXACT commit
       # ----------------------------------------------------------
-
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
+      # -----------------------------------------------------------------
+      # CREATE TERRAFORM PLUGIN CACHE DIRECTORY
+      # -----------------------------------------------------------------
+      - name: Create Terraform plugin cache directory
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+      # -----------------------------------------------------------------
+      # CONFIGURE TERRAFORM PLUGIN CACHE
+      # -----------------------------------------------------------------
+      - name: Configure Terraform CLI plugin cache
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "$TF_CLI_CONFIG_FILE" <<EOF
+          plugin_cache_dir = "$TF_PLUGIN_CACHE_DIR"
+          EOF
+
+          echo "Terraform CLI configuration:"
+          cat "$TF_CLI_CONFIG_FILE"
+
+      # -----------------------------------------------------------------
+      # RESTORE TERRAFORM PROVIDER CACHE
+      # -----------------------------------------------------------------
+      - name: Cache Terraform providers
+        id: terraform-provider-cache
+        uses: actions/cache@v4
+        with:
+
+          path: ${{ github.workspace }}/.terraform.d/plugin-cache
+
+          key: terraform-provider-${{ runner.os }}-${{ runner.arch }}-${{ inputs.terraform_version }}-${{ hashFiles('Infra-repo/root/.terraform.lock.hcl') }}
+
+          restore-keys: |
+            terraform-provider-${{ runner.os }}-${{ runner.arch }}-${{ inputs.terraform_version }}-
+
+      # -----------------------------------------------------------------
+      # DISPLAY CACHE STATUS
+      # -----------------------------------------------------------------
+
+      - name: Display Terraform cache status
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.terraform-provider-cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "Terraform provider cache HIT"
+          else
+            echo "Terraform provider cache MISS"
+          fi
+
+          echo ""
+          echo "Terraform plugin cache:"
+          find "$TF_PLUGIN_CACHE_DIR" -maxdepth 5 -type f 2>/dev/null || true    
       # ----------------------------------------------------------
       # Terraform
       # ----------------------------------------------------------
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
-
-
       # ----------------------------------------------------------
       # AWS OIDC
       # ----------------------------------------------------------
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-south-1
           audience: sts.amazonaws.com
-
+      # -----------------------------------------------------------------
+      # VERIFY AWS IDENTITY
+      # -----------------------------------------------------------------
+      - name: Verify AWS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity    
 
       # ----------------------------------------------------------
       # Terraform Init
       # ----------------------------------------------------------
-
       - name: Terraform Init
         run: |
           set -euo pipefail
-          terraform init -input=false
-
+          terraform init -input=false    
 
       # ----------------------------------------------------------
       # Workspace
@@ -283,25 +467,43 @@ jobs:
           TF_WORKSPACE_NAME: ${{ inputs.environment }}
         run: |
           set -euo pipefail
+          echo "Terraform workspace: $TF_WORKSPACE_NAME"
           terraform workspace select "$TF_WORKSPACE_NAME" \
             || terraform workspace new "$TF_WORKSPACE_NAME"
-
 
       # ----------------------------------------------------------
       # Download exact plan generated by PLAN job
       # ----------------------------------------------------------
-
       - name: Download Terraform plan
         uses: actions/download-artifact@v4
         with:
-          name: tfplan-${{ inputs.environment }}
+          name: tfplan-${{ inputs.environment }}-${{ github.sha }}
           path: ${{ inputs.working_directory }}
 
+      # -----------------------------------------------------------------
+      # VERIFY DOWNLOADED PLAN
+      # -----------------------------------------------------------------
+
+      - name: Verify downloaded Terraform plan
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PLAN_FILE="${{ inputs.working_directory }}/tfplan"
+
+          if [[ ! -f "$PLAN_FILE" ]]; then
+            echo "ERROR: Terraform plan artifact was not downloaded."
+            echo "Expected:"
+            echo "$PLAN_FILE"
+            exit 1
+          fi
+
+          echo "Downloaded Terraform plan:"
+          ls -lh "$PLAN_FILE"    
 
       # ----------------------------------------------------------
-      # Apply
+      # Terraform Apply
       # ----------------------------------------------------------
-
       - name: Terraform Apply
         run: |
           set -euo pipefail

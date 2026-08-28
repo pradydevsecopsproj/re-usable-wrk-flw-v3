@@ -28,7 +28,6 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
-
         tflint -f compact
 
 
@@ -41,7 +40,6 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       run: |
         set -euo pipefail
-
         terraform fmt -check -recursive
 
 
@@ -54,5 +52,4 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       run: |
         set -euo pipefail
-
         terraform validate

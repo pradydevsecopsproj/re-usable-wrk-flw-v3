@@ -47,10 +47,8 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
-
         tflint --init
-
-
+    
     # ------------------------------------------------------------
     # Display versions --- Optional ------Comment
     # ------------------------------------------------------------
@@ -59,13 +57,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-
         terraform version
-
 
     - name: Display TFLint version
       shell: bash
       run: |
         set -euo pipefail
-
         tflint --version
